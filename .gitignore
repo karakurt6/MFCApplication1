@@ -7,6 +7,7 @@
 *.rsuser
 *.suo
 *.user
+*.filters
 *.userosscache
 *.sln.docstates
 
@@ -361,3 +362,4 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/MFCApplication1/MFCApplication1.vcxproj.filters

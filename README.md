@@ -7,4 +7,5 @@ with changes in boundary conditions, flow control devices and environment. These
 reflect in state of operation of OLGA model.
 
 This work is base on materials published in book *OPC client programming on C++ and C#* 
-by Dennis Fedorenko. Currently implemented only synchroneous reading of server data.
+by Dennis Fedorenko. Currently implemented both synchroneous an asynchroneous reading 
+of server data.

@@ -7,6 +7,7 @@
 #include "MFCApplication1.h"
 #include "MFCApplication1Dlg.h"
 #include "ToStringConverter.h"
+#include "DataCallback.h"
 #include "afxdialogex.h"
 
 #ifdef _DEBUG
@@ -55,6 +56,10 @@ CMFCApplication1Dlg::CMFCApplication1Dlg(CWnd* pParent /*=nullptr*/)
 	: CDialogEx(IDD_MFCAPPLICATION1_DIALOG, pParent)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+	m_dwCookie = 0;
+	m_pSink = NULL;
+	m_hGroup = 0;
+	m_pOPCServer = NULL;
 }
 
 void CMFCApplication1Dlg::DoDataExchange(CDataExchange* pDX)
@@ -72,6 +77,7 @@ BEGIN_MESSAGE_MAP(CMFCApplication1Dlg, CDialogEx)
 ON_WM_DESTROY()
 ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST1, &CMFCApplication1Dlg::OnLvnItemchangedList1)
 ON_BN_CLICKED(IDC_BUTTON1, &CMFCApplication1Dlg::OnBnClickedButton1)
+ON_BN_CLICKED(IDC_BUTTON2, &CMFCApplication1Dlg::OnBnClickedButton2)
 END_MESSAGE_MAP()
 
 
@@ -106,7 +112,7 @@ BOOL CMFCApplication1Dlg::OnInitDialog()
 	SetIcon(m_hIcon, TRUE);			// Set big icon
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
-	CoInitialize(NULL);
+	HRESULT hr = CoInitialize(NULL);
 	if (0 == ShowRegisteredServers())
 	{
 		MessageBox(L"Нет установленных серверов", L"Список серверов", MB_OK);
@@ -234,6 +240,10 @@ void CMFCApplication1Dlg::OnDestroy()
 	}
 
 	CDialogEx::OnDestroy();
+
+	OnServerChange();
+	m_pOPCServer->Release();
+	delete m_pSink;
 }
 
 
@@ -305,7 +315,16 @@ void CMFCApplication1Dlg::DisplayChildren(HTREEITEM hParent, IOPCBrowseServerAdd
 
 void CMFCApplication1Dlg::OnServerChange()
 {
-	// TODO: Add your implementation code here.
+	if (m_dwCookie != 0)
+	{
+		m_pDataCallback->Unadvise(m_dwCookie);
+		m_dwCookie = 0;
+	}
+	if (m_hGroup != 0)
+	{
+		m_pOPCServer->RemoveGroup(m_hGroup, 1);
+		m_hGroup = 0;
+	}
 }
 
 int CMFCApplication1Dlg::ConnectAndBrowseServer(const GUID* pGuid)
@@ -398,18 +417,17 @@ void CMFCApplication1Dlg::OnBnClickedButton1()
 {
 
 	HRESULT hRes;
-	/*
-	Этот участок на данном этапе должен быть закомментирован. Его
-	необходимо будет использовать тогда, когда добавим асинхронную
-	операцию чтения по подписке
+	
+	//Этот участок на этапе синхронного чтения должен быть закомментирован. Его
+	//необходимо будет использовать тогда, когда добавим асинхронную
+	//операцию чтения по подписке
 	if (m_dwCookie!=0)
 	{
-	hRes = ((IConnectionPoint*)m_pDataCallback) ->Unadvise(
-	m_dwCookie);
-	m_pDataCallback->Release();
-	m_dwCookie = 0;
+		hRes = ((IConnectionPoint*)m_pDataCallback) ->Unadvise(m_dwCookie);
+		m_pDataCallback->Release();
+		m_dwCookie = 0;
 	}
-	*/
+	
 
 	m_valueView.DeleteAllItems();
 	LPWSTR szItemID = GetCurrentItemID();
@@ -527,4 +545,95 @@ void CMFCApplication1Dlg::OnBnClickedButton1()
 		CoTaskMemFree(pItems);
 	}
 
+}
+
+
+void CMFCApplication1Dlg::OnBnClickedButton2()
+{
+	HRESULT hRes;
+	LPWSTR szItemID = GetCurrentItemID();
+	if (NULL == szItemID) return;
+
+	long bActive = 1;
+	DWORD dwUpdateRate = 0;
+	IOPCItemMgt* pItemMgt = NULL;
+	unsigned hClientGroup = 1;
+
+	if (m_dwCookie != 0)
+	{
+		hRes = ((IConnectionPoint*)m_pDataCallback)->Unadvise(m_dwCookie);
+		m_pDataCallback->Release();
+		m_dwCookie = 0;
+	}
+	// if (m_hGroup != 0)
+	{
+		hRes = m_pOPCServer->RemoveGroup(m_hGroup, 1);
+		m_hGroup = 0;
+	}
+	// else
+	{
+		hRes = m_pOPCServer->AddGroup(OLESTR("MyGroup"), bActive, dwUpdateRate, hClientGroup, NULL, NULL, 0,
+			&m_hGroup, &dwUpdateRate, IID_IOPCItemMgt, (IUnknown**)&pItemMgt);
+		if (FAILED(hRes))
+		{
+			LPWSTR lpError;
+			m_pOPCServer->GetErrorString(hRes, LOCALE_SYSTEM_DEFAULT, &lpError);
+			MessageBox(lpError, L"Ошибка", MB_OK);
+			return;
+		}
+	}
+	IConnectionPointContainer* pCPC;
+	IID IID_CPC = __uuidof(IConnectionPointContainer);
+	hRes = pItemMgt->QueryInterface(IID_CPC, (void**)&pCPC);
+
+	hRes = pCPC->FindConnectionPoint(__uuidof(IOPCDataCallback),
+		(IConnectionPoint**)&m_pDataCallback);
+	pCPC->Release();
+
+	if (NULL == m_pSink)
+		m_pSink = new CDataCallback(&m_valueView, szItemID);
+	else
+		m_pSink->SetItemID(szItemID);
+
+	hRes = ((IConnectionPoint*)m_pDataCallback)->Advise((IUnknown*)m_pSink, &m_dwCookie);
+
+	if (FAILED(hRes))
+	{
+		LPWSTR lpError;
+		m_pOPCServer->GetErrorString(hRes, 2, &lpError);
+		MessageBox(lpError, L"Ошибка", MB_OK);
+	}
+
+	//Добавляем элементы в группу
+	DWORD dwCount = 1;
+	tagOPCITEMDEF* pItems = (tagOPCITEMDEF*)CoTaskMemAlloc(dwCount * sizeof(tagOPCITEMDEF));
+	tagOPCITEMRESULT* pResults = NULL;
+	HRESULT* pErrors = NULL;
+
+	pItems[0].szItemID = szItemID;
+	pItems[0].szAccessPath = NULL;
+	pItems[0].bActive = TRUE;
+	pItems[0].hClient = 0;
+	pItems[0].vtRequestedDataType = VT_EMPTY;
+	pItems[0].dwBlobSize = 0;
+	pItems[0].pBlob = NULL;
+
+	hRes = pItemMgt->AddItems(1, pItems, &pResults, &pErrors);
+	if (FAILED(hRes))
+	{
+		LPWSTR lpMsg = NULL;
+	
+		m_pOPCServer->GetErrorString(hRes, 2, &lpMsg);
+		MessageBox(lpMsg, L"Ошибка", MB_OK);
+	}
+	else
+	{
+		CoTaskMemFree(pResults);
+		CoTaskMemFree(pErrors);
+	}
+
+	// Уменьшает кол-во ссылок на интерфейс
+	pItemMgt->Release();
+	//Освобождаем выделенную память
+	CoTaskMemFree(pItems);
 }
